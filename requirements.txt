@@ -1,0 +1,5 @@
+python-dotenv==1.1.1
+cdp-sdk==1.31.0
+aiohttp==3.9.1
+pandas==2.1.4
+kaggle==1.7.4.5
