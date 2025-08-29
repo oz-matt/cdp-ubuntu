@@ -79,7 +79,7 @@ Pipfile.lock
 *.sqlite3
 
 # Project specific directories
-histories/
+#histories/
 kaggle_data/
 data/
 logs/
