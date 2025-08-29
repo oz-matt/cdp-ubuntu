@@ -130,7 +130,20 @@ def run_strategy_backtest(df: pd.DataFrame, strategy_class, investment_amount: f
     # Group data by day to add pauses
     df['date'] = pd.to_datetime(df['timestamp'], unit='s').dt.date
     daily_groups = df.groupby('date')
-    total_days = len(daily_groups)
+    # Optional limit for quick test runs
+    max_days_env = os.getenv('BACKTEST_MAX_DAYS')
+    if max_days_env is not None:
+        try:
+            max_days = int(max_days_env)
+            unique_dates = list(daily_groups.groups.keys())[:max_days]
+            daily_groups = ((d, df[df['date'] == d]) for d in unique_dates)
+            total_days = len(unique_dates)
+        except Exception:
+            # Fallback to full dataset if env var invalid
+            daily_groups = df.groupby('date')
+            total_days = daily_groups.ngroups
+    else:
+        total_days = daily_groups.ngroups
     
     print(f"📅 Processing {total_days:,} days of data...")
     
@@ -199,8 +212,10 @@ def run_strategy_backtest(df: pd.DataFrame, strategy_class, investment_amount: f
             remaining = estimated_total - elapsed
             print(f"   🎯 MILESTONE: {progress:.1f}% complete ({processed_days}/{total_days} days) | ⏱️ ETA: {remaining/60:.1f}m | 💎 Portfolio: ${current_value:,.0f}")
         
-        # CPU-friendly pause between days
-        time.sleep(0.15)
+        # CPU-friendly pause between days (configurable)
+        sleep_sec = float(os.getenv('BACKTEST_SLEEP_SEC', '0.15'))
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
     
     print(f"✅ Backtest completed in {(time.time() - start_time)/60:.1f} minutes")
     
