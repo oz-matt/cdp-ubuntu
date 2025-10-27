@@ -118,21 +118,43 @@ def load_strategy(strategy_name: str):
         print(f"❌ Error loading strategy '{strategy_name}': {e}")
         return None
 
-def run_strategy_backtest(df: pd.DataFrame, strategy_class, investment_amount: float = 1000):
-    """Run backtest with CPU-friendly pauses."""
-    print(f"🎯 Running {strategy_class.__name__} backtest...")
-    print(f"💰 Initial investment: ${investment_amount:,.2f}")
-    print(f"📊 Processing {len(df):,} data points with 0.3s pauses between days...")
-    
+def run_strategy_backtest(df: pd.DataFrame, strategy_or_class, investment_amount: float = 1000, silent: bool = False, strategy_kwargs: Dict[str, Any] | None = None):
+    """Run backtest with CPU-friendly pauses.
+    strategy_or_class can be a class or a pre-instantiated strategy.
+    """
     # Initialize strategy
-    strategy = strategy_class(initial_balance=investment_amount)
+    if isinstance(strategy_or_class, type):
+        strategy = strategy_or_class(initial_balance=investment_amount, **(strategy_kwargs or {}))
+        strategy_name = strategy_or_class.__name__
+    else:
+        strategy = strategy_or_class
+        strategy_name = strategy.__class__.__name__
+    
+    if not silent:
+        print(f"🎯 Running {strategy_name} backtest...")
+        print(f"💰 Initial investment: ${investment_amount:,.2f}")
+        print(f"📊 Processing {len(df):,} data points with 0.3s pauses between days...")
     
     # Group data by day to add pauses
     df['date'] = pd.to_datetime(df['timestamp'], unit='s').dt.date
     daily_groups = df.groupby('date')
-    total_days = len(daily_groups)
+    # Optional limit for quick test runs
+    max_days_env = os.getenv('BACKTEST_MAX_DAYS')
+    if max_days_env is not None:
+        try:
+            max_days = int(max_days_env)
+            unique_dates = list(daily_groups.groups.keys())[:max_days]
+            daily_groups = ((d, df[df['date'] == d]) for d in unique_dates)
+            total_days = len(unique_dates)
+        except Exception:
+            # Fallback to full dataset if env var invalid
+            daily_groups = df.groupby('date')
+            total_days = daily_groups.ngroups
+    else:
+        total_days = daily_groups.ngroups
     
-    print(f"📅 Processing {total_days:,} days of data...")
+    if not silent:
+        print(f"📅 Processing {total_days:,} days of data...")
     
     start_time = time.time()
     processed_days = 0
@@ -180,7 +202,8 @@ def run_strategy_backtest(df: pd.DataFrame, strategy_class, investment_amount: f
         pnl_color = "🟢" if daily_pnl >= 0 else "🔴"
         total_color = "🟢" if total_pnl >= 0 else "🔴"
         
-        print(f"📅 {date} | 💰 ${current_value:,.0f} | {pnl_color} Day: {daily_pnl:+.0f} | {total_color} Total: {total_pnl:+.1f}% | 📊 ETH: ${final_price_of_day:.0f} | 🔄 {strategy.portfolio.trades_count} trades")
+        if not silent:
+            print(f"📅 {date} | 💰 ${current_value:,.0f} | {pnl_color} Day: {daily_pnl:+.0f} | {total_color} Total: {total_pnl:+.1f}% | 📊 ETH: ${final_price_of_day:.0f} | 🔄 {strategy.portfolio.trades_count} trades")
         
         # Record end-of-day portfolio state for next day's comparison
         strategy.portfolio_history.append({
@@ -192,17 +215,20 @@ def run_strategy_backtest(df: pd.DataFrame, strategy_class, investment_amount: f
         })
         
         # Progress milestone every 100 days
-        if processed_days % 100 == 0:
+        if not silent and processed_days % 100 == 0:
             progress = (processed_days / total_days) * 100
             elapsed = time.time() - start_time
             estimated_total = (elapsed / processed_days) * total_days
             remaining = estimated_total - elapsed
             print(f"   🎯 MILESTONE: {progress:.1f}% complete ({processed_days}/{total_days} days) | ⏱️ ETA: {remaining/60:.1f}m | 💎 Portfolio: ${current_value:,.0f}")
         
-        # CPU-friendly pause between days
-        time.sleep(0.15)
+        # CPU-friendly pause between days (configurable)
+        sleep_sec = float(os.getenv('BACKTEST_SLEEP_SEC', '0.15'))
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
     
-    print(f"✅ Backtest completed in {(time.time() - start_time)/60:.1f} minutes")
+    if not silent:
+        print(f"✅ Backtest completed in {(time.time() - start_time)/60:.1f} minutes")
     
     # Calculate final results
     final_value = strategy.portfolio.total_value
@@ -219,7 +245,7 @@ def run_strategy_backtest(df: pd.DataFrame, strategy_class, investment_amount: f
         max_drawdown = 0
     
     return {
-        'strategy_name': strategy_class.__name__,
+        'strategy_name': strategy_name,
         'initial_investment': investment_amount,
         'final_value': final_value,
         'total_return': total_return,
@@ -334,9 +360,26 @@ def main():
         list_available_strategies()
         sys.exit(1)
     
+    # Parse optional strategy kwargs like key=value after amount
+    strategy_kwargs: Dict[str, Any] = {}
+    if len(sys.argv) > 3:
+        for arg in sys.argv[3:]:
+            if '=' in arg:
+                key, value = arg.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                if value.lower() in {'true', 'false'}:
+                    cast_value = value.lower() == 'true'
+                else:
+                    try:
+                        cast_value = float(value) if '.' in value else int(value)
+                    except Exception:
+                        cast_value = value
+                strategy_kwargs[key] = cast_value
+    
     # Run strategy backtest
     print(f"\n🎮 Running strategy backtest...")
-    strategy_results = run_strategy_backtest(df, strategy_class, investment_amount)
+    strategy_results = run_strategy_backtest(df, strategy_class, investment_amount, silent=False, strategy_kwargs=strategy_kwargs)
     
     # Display results
     display_results(hodl_results, strategy_results)
